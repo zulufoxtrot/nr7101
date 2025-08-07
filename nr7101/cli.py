@@ -4,6 +4,7 @@ import argparse
 import logging
 import json
 import http.client
+
 from .nr7101 import NR7101
 from .version import __version__
 
@@ -35,11 +36,6 @@ def cli():
 
     args = parser.parse_args()
 
-    dev = NR7101(args.url, args.username, args.password)
-
-    if not args.no_cookie:
-        dev.load_cookies(args.cookie)
-
     if args.verbose > 0:
         http.client.HTTPConnection.debuglevel = 1
         logging.basicConfig()
@@ -48,11 +44,17 @@ def cli():
         requests_log.setLevel(logging.DEBUG)
         requests_log.propagate = True
 
+    dev = NR7101(args.url, args.username, args.password)
+
+    if not args.no_cookie:
+        dev.load_cookies(args.cookie)
+
     status = None
 
     for _retry in range(RETRY_COUNT):
         try:
             status = dev.get_status(RETRY_COUNT)
+            status["device_info"] = dev.get_json_object("status")
             if not args.no_cookie:
                 dev.store_cookies(args.cookie)
             break
@@ -67,16 +69,18 @@ def cli():
 
     if status is None:
         return 1
+    
+    dev.logout()
 
-    do_reboot = False
-    if status["cellular"]["INTF_Status"] == "Down":
-        logger.warn("The connection is down.")
-        if args.reboot:
-            do_reboot = True
-
-    if do_reboot or args.force_reboot:
-        logger.warn("Rebooting")
-        dev.reboot()
+    # do_reboot = False
+    # if status["cellular"]["INTF_Status"] == "Down":
+    #     logger.warn("The connection is down.")
+    #     if args.reboot:
+    #         do_reboot = True
+    # 
+    # if do_reboot or args.force_reboot:
+    #     logger.warn("Rebooting")
+    #     dev.reboot()
 
     return 0
 

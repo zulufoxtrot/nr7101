@@ -3,6 +3,12 @@
 import logging
 import json
 import base64
+import os
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_v1_5
+
 import requests
 import urllib3
 
@@ -19,6 +25,28 @@ class NR7101:
         self.url = url
         self.params = params
         password_b64 = base64.b64encode(password.encode("utf-8")).decode("utf-8")
+        
+        # NR7101 is using by default self-signed certificates, so ignore the warnings
+        self.params["verify"] = False
+        urllib3.disable_warnings()
+        
+        logger.debug("WAWA")
+        
+        self.rsa_key = None
+        # Request to GET /GetRSAPublickKey if it doesn't return 200, then false
+        with requests.get(
+            self.url + "/getRSAPublickKey", None, **self.params
+        ) as r:
+            # If response isn't JSON then no encryption is used
+            if r.headers.get("Content-Type") == "application/json":
+                self.rsa_key = r.json().get("RSAPublicKey", None)
+                self.aes_key = os.urandom(32)  # 256-bit AES key
+                self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
+                if self.rsa_key is None:
+                    logger.error("No RSA public key found in response")
+                    exit(1)
+                logger.debug("Encryption enabled for router")
+        
         self.login_params = {
             "Input_Account": username,
             "Input_Passwd": password_b64,
@@ -28,9 +56,7 @@ class NR7101:
         }
         self.sessionkey = None
 
-        # NR7101 is using by default self-signed certificates, so ignore the warnings
-        self.params["verify"] = False
-        urllib3.disable_warnings()
+
 
     def load_cookies(self, cookiefile):
         cookies = {}
@@ -59,7 +85,12 @@ class NR7101:
         logger.debug("Cookies saved")
 
     def login(self):
-        login_json = json.dumps(self.login_params)
+        print("Logging in...")
+        if self.rsa_key is not None:
+           login_json = self.encrypt_request(self.login_params)
+        else:
+            login_json = json.dumps(self.login_params)
+
 
         with requests.post(
             self.url + "/UserLogin", data=login_json, **self.params
@@ -70,7 +101,10 @@ class NR7101:
 
             # Update cookies
             self.params["cookies"] = requests.utils.dict_from_cookiejar(r.cookies)
-            self.sessionkey = r.json()["sessionkey"]
+            if self.rsa_key is not None:
+                self.sessionkey = self.decrypt_response(r.json())["sessionkey"]
+            else:
+                self.sessionkey = r.json()["sessionkey"]
             return self.sessionkey
 
     def logout(self, sessionkey=None):
@@ -90,7 +124,7 @@ class NR7101:
         with requests.get(self.url + "/UserLoginCheck", **self.params) as r:
             assert r.status_code == 200
 
-    def get_status(self, retries=2):
+    def get_status(self, retries=2):           
         def parse_traffic_object(obj):
             ret = {}
             for iface, iface_st in zip(obj["ipIface"], obj["ipIfaceSt"]):
@@ -122,8 +156,13 @@ class NR7101:
     def get_json_object(self, oid):
         with requests.get(self.url + "/cgi-bin/DAL?oid=" + oid, **self.params) as r:
             r.raise_for_status()
-            j = r.json()
+            if self.rsa_key is not None:
+                j = self.decrypt_response(r.json())
+            else:
+                j = r.json()
             assert j["result"] == "ZCFG_SUCCESS"
+            if not j["Object"]:
+                return None
             return j["Object"][0]
 
     def reboot(self):
@@ -137,3 +176,36 @@ class NR7101:
             r.raise_for_status()
             j = r.json()
             assert j["result"] == "ZCFG_SUCCESS"
+            
+    def encrypt_request(self, json_data: dict) -> str:
+        json_body = json.dumps(json_data).encode('utf-8')
+        padded = pad(json_body, 16)
+        # Encrypt the login parameters using AES
+        cipher = AES.new(self.aes_key, AES.MODE_CBC, self.iv)
+        ciphertext = cipher.encrypt(padded)
+        content_b64 = base64.b64encode(ciphertext).decode()
+
+        rsa_key = RSA.import_key(self.rsa_key.encode('utf-8'))
+        cipher_rsa = PKCS1_v1_5.new(rsa_key)
+        aes_key_b64 = base64.b64encode(self.aes_key).decode()
+        encrypted_key = cipher_rsa.encrypt(aes_key_b64.encode())
+        key_b64 = base64.b64encode(encrypted_key).decode()
+
+        return json.dumps({
+            "content": content_b64,
+            "key": key_b64,
+            "iv": base64.b64encode(self.iv).decode()
+        })
+
+    def decrypt_response(self, encrypted_json: dict) -> dict:
+        # Decode base64 values
+        iv = base64.b64decode(encrypted_json["iv"])[:16]  # Ensure IV is 16 bytes
+        ciphertext = base64.b64decode(encrypted_json["content"])
+
+        # Decrypt with AES (CBC mode)
+        cipher = AES.new(self.aes_key, AES.MODE_CBC, iv)
+        decrypted_padded = cipher.decrypt(ciphertext)
+        decrypted_data = unpad(decrypted_padded, 16)
+
+        # Return as JSON (dict)
+        return json.loads(decrypted_data.decode("utf-8"))

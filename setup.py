@@ -12,6 +12,7 @@ setup(
     packages=["nr7101"],
     install_requires=[
         "requests",
+        "pycryptodome"
     ],
     entry_points={
         "console_scripts": ["nr7101-tool=nr7101.cli:cli"],
