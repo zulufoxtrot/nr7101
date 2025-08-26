@@ -24,27 +24,27 @@ class NR7101:
     def __init__(self, url, username, password, params={}):
         self.url = url
         self.params = params
+        self.rsa_key = None
+        self.encryption_required = False
         password_b64 = base64.b64encode(password.encode("utf-8")).decode("utf-8")
-        
+
         # NR7101 is using by default self-signed certificates, so ignore the warnings
         self.params["verify"] = False
         urllib3.disable_warnings()
-        
+
         logger.debug("WAWA")
-        
-        self.rsa_key = None
+
         # Request to GET /GetRSAPublickKey if it doesn't return 200, then false
         with requests.get(
             self.url + "/getRSAPublickKey", None, **self.params
         ) as r:
-            # If response isn't JSON then no encryption is used
-            if r.headers.get("Content-Type") == "application/json":
-                self.rsa_key = r.json().get("RSAPublicKey", None)
-                self.aes_key = os.urandom(32)  # 256-bit AES key
-                self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
-                if self.rsa_key is None:
-                    logger.error("No RSA public key found in response")
-                    exit(1)
+            self.rsa_key = r.json().get("RSAPublicKey", None)
+            if self.rsa_key == "None":     # yes, the router can return a "None" str
+                self.rsa_key = None
+            self.encryption_required = bool(self.rsa_key)
+            self.aes_key = os.urandom(32)  # 256-bit AES key
+            self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
+            if self.encryption_required:
                 logger.debug("Encryption enabled for router")
         
         self.login_params = {
@@ -55,8 +55,6 @@ class NR7101:
             "SHA512_password": False,
         }
         self.sessionkey = None
-
-
 
     def load_cookies(self, cookiefile):
         cookies = {}
@@ -86,7 +84,7 @@ class NR7101:
 
     def login(self):
         print("Logging in...")
-        if self.rsa_key is not None:
+        if self.encryption_required:
            login_json = self.encrypt_request(self.login_params)
         else:
             login_json = json.dumps(self.login_params)
@@ -101,11 +99,10 @@ class NR7101:
 
             # Update cookies
             self.params["cookies"] = requests.utils.dict_from_cookiejar(r.cookies)
-            if self.rsa_key is not None:
-                self.sessionkey = self.decrypt_response(r.json())["sessionkey"]
+            if self.encryption_required:
+                self.sessionkey = self. decrypt_response(r.json())["sessionkey"]
             else:
                 self.sessionkey = r.json()["sessionkey"]
-            return self.sessionkey
 
     def logout(self, sessionkey=None):
         if sessionkey is None:
@@ -156,7 +153,7 @@ class NR7101:
     def get_json_object(self, oid):
         with requests.get(self.url + "/cgi-bin/DAL?oid=" + oid, **self.params) as r:
             r.raise_for_status()
-            if self.rsa_key is not None:
+            if self.encryption_required:
                 j = self.decrypt_response(r.json())
             else:
                 j = r.json()

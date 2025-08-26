@@ -5,8 +5,8 @@ import logging
 import json
 import http.client
 
-from .nr7101 import NR7101
-from .version import __version__
+from nr7101.nr7101 import NR7101
+from version import __version__
 
 RETRY_COUNT = 2
 
@@ -71,16 +71,6 @@ def cli():
         return 1
     
     dev.logout()
-
-    # do_reboot = False
-    # if status["cellular"]["INTF_Status"] == "Down":
-    #     logger.warn("The connection is down.")
-    #     if args.reboot:
-    #         do_reboot = True
-    # 
-    # if do_reboot or args.force_reboot:
-    #     logger.warn("Rebooting")
-    #     dev.reboot()
 
     return 0
 
