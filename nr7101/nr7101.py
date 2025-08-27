@@ -12,6 +12,8 @@ from Crypto.Cipher import PKCS1_v1_5
 import requests
 import urllib3
 
+from nr7101.util import parse_traffic_object
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,26 +26,23 @@ class NR7101:
     def __init__(self, url, username, password, params={}):
         self.url = url
         self.params = params
-        self.rsa_key = None
-        self.encryption_required = False
         password_b64 = base64.b64encode(password.encode("utf-8")).decode("utf-8")
-
+        
         # NR7101 is using by default self-signed certificates, so ignore the warnings
         self.params["verify"] = False
         urllib3.disable_warnings()
-
-        logger.debug("WAWA")
-
+                
+        self.rsa_key = None
         # Request to GET /GetRSAPublickKey if it doesn't return 200, then false
         with requests.get(
             self.url + "/getRSAPublickKey", None, **self.params
         ) as r:
             self.rsa_key = r.json().get("RSAPublicKey", None)
-            if self.rsa_key == "None":     # yes, the router can return a "None" str
+            if self.rsa_key == "None":  # yes, the router can return a "None" str
                 self.rsa_key = None
             self.encryption_required = bool(self.rsa_key)
             self.aes_key = os.urandom(32)  # 256-bit AES key
-            self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
+            self.iv = os.urandom(16)  # 256-bit IV (some routers use 16 bytes; match what router expects)
             if self.encryption_required:
                 logger.debug("Encryption enabled for router")
         
@@ -54,121 +53,67 @@ class NR7101:
             "RememberPassword": 0,
             "SHA512_password": False,
         }
-        self.sessionkey = None
-
-    def load_cookies(self, cookiefile):
-        cookies = {}
-        try:
-            with open(cookiefile, "rt") as f:
-                cookies = json.load(f)
-            logger.debug("Cookies loaded")
-            self.params["cookies"] = cookies
-        except FileNotFoundError:
-            logger.debug("Cookie file does not exist, ignoring.")
-        except json.JSONDecodeError:
-            logger.warn("Ignoring invalid cookie file.")
-
-    def clear_cookies(self):
-        self.params.pop("cookies", None)
-
-    def store_cookies(self, cookiefile):
-        try:
-            cookies = self.params["cookies"]
-        except KeyError:
-            logger.warn("No cookie to write")
-            return
-
-        with open(cookiefile, "wt") as f:
-            json.dump(cookies, f)
-        logger.debug("Cookies saved")
+        self.session_key = None
 
     def login(self):
-        print("Logging in...")
+        logger.info("Logging in...")
         if self.encryption_required:
            login_json = self.encrypt_request(self.login_params)
         else:
             login_json = json.dumps(self.login_params)
-
 
         with requests.post(
             self.url + "/UserLogin", data=login_json, **self.params
         ) as r:
             if r.status_code != 200:
                 logger.error("Unauthorized")
-                return
+                return None
 
             # Update cookies
             self.params["cookies"] = requests.utils.dict_from_cookiejar(r.cookies)
-            if self.encryption_required:
-                self.sessionkey = self. decrypt_response(r.json())["sessionkey"]
+            data = r.json()
+            if "iv" in data:
+                self.session_key = self.decrypt_response(data)["sessionkey"]
             else:
-                self.sessionkey = r.json()["sessionkey"]
+                self.session_key = data["sessionkey"]
+            return self.session_key
 
-    def logout(self, sessionkey=None):
-        if sessionkey is None:
-            sessionkey = self.sessionkey
+    def logout(self):
         with requests.get(
-            f"{self.url}/cgi-bin/UserLogout?sessionkey={sessionkey}", **self.params
+            f"{self.url}/cgi-bin/UserLogout?sessionkey={self.session_key}", **self.params
         ) as r:
             assert r.status_code == 200
-
-    def connect(self):
-        with requests.get(self.url + "/getBasicInformation", **self.params) as r:
-            assert r.status_code == 200
-            assert r.json()["result"] == "ZCFG_SUCCESS", "Connection failure"
-
-        # Check login
-        with requests.get(self.url + "/UserLoginCheck", **self.params) as r:
-            assert r.status_code == 200
-
-    def get_status(self, retries=2):           
-        def parse_traffic_object(obj):
-            ret = {}
-            for iface, iface_st in zip(obj["ipIface"], obj["ipIfaceSt"]):
-                ret[iface["X_ZYXEL_IfName"]] = iface_st
-            return ret
-
-        while retries > 0:
-            try:
-                cellular = self.get_json_object("cellwan_status")
-                traffic = parse_traffic_object(self.get_json_object("Traffic_Status"))
-                return {
-                    "cellular": cellular,
-                    "traffic": traffic,
-                }
-            except requests.exceptions.HTTPError as e:
-                logger.warn(e)
-                if e.response.status_code == 401:
-                    # Unauthorized
-                    logger.info("Login")
-                    self.login()
-                elif e.response.status_code == 500:
-                    logger.info(
-                        "Internal server error received. Retrying without cookies."
-                    )
-                    self.clear_cookies()
-                retries -= 1
-        return None
 
     def get_json_object(self, oid):
         with requests.get(self.url + "/cgi-bin/DAL?oid=" + oid, **self.params) as r:
             r.raise_for_status()
-            if self.encryption_required:
-                j = self.decrypt_response(r.json())
-            else:
-                j = r.json()
-            assert j["result"] == "ZCFG_SUCCESS"
-            if not j["Object"]:
+            data = r.json()
+            if "iv" in data:
+                data = self.decrypt_response(r.json())
+
+            if not data["Object"]:
                 return None
-            return j["Object"][0]
+            return data["Object"][0]
+        
+    def do_request(self, path):
+        with requests.get(
+            self.url + path, **self.params
+        ) as r:
+            r.raise_for_status()
+            data = r.json()
+            if "iv" in data:
+                data = self.decrypt_response(r.json())
+            
+            assert data["result"] == "ZCFG_SUCCESS"
+            return data
 
     def reboot(self):
-        if self.sessionkey is None:
+        if self.session_key is None:
             self.login()
 
         logger.info("Rebooting...")
         with requests.post(
-            f"{self.url}/cgi-bin/Reboot?sessionkey={self.sessionkey}", **self.params
+            f"{self.url}/cgi-bin/Reboot?sessionkey={self.session_key}", **self.params
         ) as r:
             r.raise_for_status()
             j = r.json()
