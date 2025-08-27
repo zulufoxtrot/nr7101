@@ -5,8 +5,8 @@ import logging
 import json
 import http.client
 
-from nr7101.nr7101 import NR7101
-from version import __version__
+from .nr7101 import NR7101
+from .version import __version__
 
 RETRY_COUNT = 2
 
@@ -18,18 +18,6 @@ def cli():
         description=f"NR7101 status fetcher v{__version__}"
     )
     parser.add_argument("--verbose", "-v", action="count", default=0)
-    parser.add_argument("--cookie", default=".nr7101.cookie")
-    parser.add_argument("--no-cookie", action="store_true")
-    parser.add_argument(
-        "--reboot",
-        action="store_true",
-        help="Reboot the unit if the connection is down",
-    )
-    parser.add_argument(
-        "--force-reboot",
-        action="store_true",
-        help="Reboot the unit regardless of the connection status",
-    )
     parser.add_argument("url")
     parser.add_argument("username")
     parser.add_argument("password")
@@ -44,36 +32,36 @@ def cli():
         requests_log.setLevel(logging.DEBUG)
         requests_log.propagate = True
 
-    dev = NR7101(args.url, args.username, args.password)
+    router_connection = NR7101(args.url, args.username, args.password)
 
-    if not args.no_cookie:
-        dev.load_cookies(args.cookie)
+    if router_connection.login() is None:
+        return
 
-    status = None
-
-    for _retry in range(RETRY_COUNT):
-        try:
-            status = dev.get_status(RETRY_COUNT)
-            status["device_info"] = dev.get_json_object("status")
-            if not args.no_cookie:
-                dev.store_cookies(args.cookie)
-            break
-        except OSError:
-            logger.warn("Unable to connect")
-        except TimeoutError:
-            logger.warn("Timeout")
-        except ConnectionError:
-            pass
-
-    print(json.dumps(status, indent=2))
-
-    if status is None:
-        return 1
-    
-    dev.logout()
-
-    return 0
-
+    try:
+        while True:
+            action = input("Enter DAL command, route (starting with /) or 'exit' to quit: ").strip()
+            if action.lower() == "exit":
+                router_connection.logout()
+                break
+            if action:
+                if action.startswith('/'):
+                    response = router_connection.do_request(action)
+                    if response is not None:
+                        print(json.dumps(response, indent=2))
+                    else:
+                        print("No response or invalid route.")
+                else:
+                    try:
+                        response = router_connection.get_json_object(action)
+                        if response is not None:
+                            print(json.dumps(response, indent=2))
+                        else:
+                            print("No response or invalid command.")
+                    except Exception as e:
+                        print(f"Error executing command '{action}': {e}")
+    except KeyboardInterrupt:
+        router_connection.logout()
+        return
 
 if __name__ == "__main__":
     import sys
