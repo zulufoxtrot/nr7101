@@ -5,8 +5,8 @@ import logging
 import json
 import http.client
 
-from .nr7101 import NR7101
-from .version import __version__
+from nr7101.nr7101 import NR7101
+from nr7101.version import __version__
 
 RETRY_COUNT = 2
 

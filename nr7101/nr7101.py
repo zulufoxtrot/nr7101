@@ -56,7 +56,7 @@ class NR7101:
         self.session_key = None
 
     def login(self):
-        logger.log("Logging in...")
+        logger.info("Logging in...")
         if self.encryption_required:
            login_json = self.encrypt_request(self.login_params)
         else:
