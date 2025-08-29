@@ -13,7 +13,6 @@ import requests
 import urllib3
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 # Let the parent logger handle console output to avoid duplicate logs
 
