@@ -349,8 +349,16 @@ class NR7101:
         return available_endpoints
 
     def get_json_object(self, oid):
-        url = self.url + "/cgi-bin/DAL?oid=" + oid
+        # Add session key to URL for authenticated requests
+        if self.sessionkey:
+            url = self.url + "/cgi-bin/DAL?oid=" + oid + "&sessionkey=" + self.sessionkey
+        else:
+            url = self.url + "/cgi-bin/DAL?oid=" + oid
         logger.debug(f"Getting JSON object from: {url}")
+        if self.sessionkey:
+            logger.debug(f"Using session key: {self.sessionkey[:20]}...")
+        else:
+            logger.debug("No session key available for request")
 
         with requests.get(url, **self.params) as r:
             logger.debug(f"Response status: {r.status_code}")
