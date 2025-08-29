@@ -4,10 +4,10 @@ import logging
 import json
 import base64
 import os
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_v1_5
+from Cryptodome.Cipher import AES
+from Cryptodome.Util.Padding import pad, unpad
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Cipher import PKCS1_v1_5
 
 import requests
 import urllib3
@@ -15,13 +15,7 @@ import urllib3
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Also create a console handler to ensure logs show up
-import sys
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+# Let the parent logger handle console output to avoid duplicate logs
 
 
 class NR7101Exception(Exception):
@@ -41,6 +35,26 @@ class NR7101:
         self.params["verify"] = False
         urllib3.disable_warnings()
 
+        # Step 1: Call GetInfoNoLogin to establish session (like browser does)
+        logger.debug("Calling GetInfoNoLogin to establish session...")
+        info_headers = {
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Accept-Language': 'en-GB,en;q=0.5',
+            'X-Requested-With': 'XMLHttpRequest',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0'
+        }
+
+        info_params = self.params.copy()
+        info_params['headers'] = info_headers
+
+        with requests.get(self.url + "/GetInfoNoLogin", **info_params) as info_r:
+            logger.debug(f"GetInfoNoLogin status: {info_r.status_code}")
+            logger.debug(f"GetInfoNoLogin response: {info_r.text}")
+            if info_r.cookies:
+                self.params["cookies"] = requests.utils.dict_from_cookiejar(info_r.cookies)
+                logger.debug(f"Session cookies from GetInfoNoLogin: {self.params['cookies']}")
+
+        # Step 2: Get RSA public key (now with session established)
         logger.debug("Attempting to get RSA public key...")
 
         # Add headers that match what the browser sends
@@ -52,7 +66,7 @@ class NR7101:
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0'
         }
 
-        # Merge with existing params
+        # Merge with existing params (including any cookies from login page)
         rsa_params = self.params.copy()
         if 'headers' in rsa_params:
             rsa_params['headers'].update(rsa_headers)
@@ -65,6 +79,14 @@ class NR7101:
         ) as r:
             logger.debug(f"RSA key request status: {r.status_code}")
             logger.debug(f"RSA key response: {r.text}")
+
+            # Update session cookies from the RSA key request (if any)
+            if r.cookies:
+                if "cookies" not in self.params:
+                    self.params["cookies"] = {}
+                new_cookies = requests.utils.dict_from_cookiejar(r.cookies)
+                self.params["cookies"].update(new_cookies)
+                logger.debug(f"Updated session cookies after RSA key request: {self.params['cookies']}")
 
             if r.status_code != 200:
                 logger.error(f"Failed to get RSA key: {r.status_code} - {r.text}")
@@ -85,18 +107,19 @@ class NR7101:
 
             self.encryption_required = bool(self.rsa_key)
             self.aes_key = os.urandom(32)  # 256-bit AES key
-            self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
+            self.iv = os.urandom(32)       # 32-byte IV to match browser behavior
             if self.encryption_required:
                 logger.debug("Encryption enabled for router")
             else:
                 logger.debug("Encryption NOT enabled - no RSA key available")
 
+        # Try parameter set that matches browser's 112-byte encrypted size
+        # Add common hidden form fields that might be present
         self.login_params = {
             "Input_Account": username,
             "Input_Passwd": password_b64,
             "currLang": "en",
             "RememberPassword": 0,
-            "SHA512_password": False,
         }
         self.sessionkey = None
 
@@ -138,13 +161,22 @@ class NR7101:
         logger.debug(f"Login URL: {self.url}/UserLogin")
         logger.debug(f"Login data length: {len(login_json)}")
 
-        # Add headers that match browser request
+        # Add headers that match browser request exactly
         login_headers = {
             'Accept': 'application/json, text/javascript, */*; q=0.01',
             'Accept-Language': 'en-GB,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'X-Requested-With': 'XMLHttpRequest',
             'If-Modified-Since': 'Thu, 01 Jun 1970 00:00:00 GMT',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Origin': self.url,
+            'DNT': '1',
+            'Sec-GPC': '1',
+            'Connection': 'keep-alive',
+            'Referer': f'{self.url}/login',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0'
         }
 
@@ -154,8 +186,12 @@ class NR7101:
         else:
             login_params['headers'] = login_headers
 
+        # Ensure we're using the session cookies from the RSA key request
+        logger.debug(f"Using session cookies for login: {login_params.get('cookies', 'None')}")
+
+        # Send encrypted JSON as raw body data despite form content-type (router expectation)
         with requests.post(
-            self.url + "/UserLogin", data=login_json, **login_params
+            self.url + "/UserLogin", data=login_json.encode('utf-8'), **login_params
         ) as r:
             logger.debug(f"Login response status: {r.status_code}")
             logger.debug(f"Login response text: {r.text}")
@@ -164,9 +200,13 @@ class NR7101:
                 logger.error(f"Login failed with status {r.status_code}: {r.text}")
                 return False
 
-            # Update cookies
-            self.params["cookies"] = requests.utils.dict_from_cookiejar(r.cookies)
-            logger.debug(f"Cookies received: {self.params['cookies']}")
+            # Update cookies with any new ones from login response
+            if r.cookies:
+                new_cookies = requests.utils.dict_from_cookiejar(r.cookies)
+                if "cookies" not in self.params:
+                    self.params["cookies"] = {}
+                self.params["cookies"].update(new_cookies)
+                logger.debug(f"Updated cookies after login: {self.params['cookies']}")
 
             try:
                 if self.encryption_required:
@@ -354,14 +394,16 @@ class NR7101:
 
     def encrypt_request(self, json_data: dict) -> str:
         logger.debug(f"Encrypting request data: {json_data}")
-        json_body = json.dumps(json_data).encode('utf-8')
+        # Use compact JSON formatting to match browser behavior
+        json_body = json.dumps(json_data, separators=(',', ':')).encode('utf-8')
+        logger.debug(f"JSON body: {json_body}")
         logger.debug(f"JSON body length: {len(json_body)}")
 
         padded = pad(json_body, 16)
         logger.debug(f"Padded data length: {len(padded)}")
 
-        # Encrypt the login parameters using AES
-        cipher = AES.new(self.aes_key, AES.MODE_CBC, self.iv)
+        # Encrypt the login parameters using AES (use only first 16 bytes of IV for CBC)
+        cipher = AES.new(self.aes_key, AES.MODE_CBC, self.iv[:16])
         ciphertext = cipher.encrypt(padded)
         content_b64 = base64.b64encode(ciphertext).decode()
         logger.debug(f"AES encrypted content length: {len(content_b64)}")
@@ -370,8 +412,9 @@ class NR7101:
             rsa_key = RSA.import_key(self.rsa_key.encode('utf-8'))
             cipher_rsa = PKCS1_v1_5.new(rsa_key)
 
-            # Fix: encrypt the raw AES key, not the base64 encoded version
-            encrypted_key = cipher_rsa.encrypt(self.aes_key)
+            # Fix: encrypt the base64-encoded AES key (this was the breakthrough!)
+            base64_encoded_key = base64.b64encode(self.aes_key)
+            encrypted_key = cipher_rsa.encrypt(base64_encoded_key)
             key_b64 = base64.b64encode(encrypted_key).decode()
             logger.debug(f"RSA encrypted key length: {len(key_b64)}")
 
@@ -392,7 +435,8 @@ class NR7101:
 
     def decrypt_response(self, encrypted_json: dict) -> dict:
         # Decode base64 values
-        iv = base64.b64decode(encrypted_json["iv"])[:16]  # Ensure IV is 16 bytes
+        full_iv = base64.b64decode(encrypted_json["iv"])
+        iv = full_iv[:16]  # Use first 16 bytes for AES-CBC
         ciphertext = base64.b64decode(encrypted_json["content"])
 
         # Decrypt with AES (CBC mode)
