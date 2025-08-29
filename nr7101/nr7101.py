@@ -13,6 +13,15 @@ import requests
 import urllib3
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Also create a console handler to ensure logs show up
+import sys
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 class NR7101Exception(Exception):
