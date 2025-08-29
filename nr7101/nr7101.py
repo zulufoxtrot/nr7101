@@ -435,17 +435,27 @@ class NR7101:
 
     def decrypt_response(self, encrypted_json: dict) -> dict:
         # Decode base64 values
-        full_iv = base64.b64decode(encrypted_json["iv"])
-        iv = full_iv[:16]  # Use first 16 bytes for AES-CBC
+        response_iv_b64 = encrypted_json["iv"]
+        response_iv = base64.b64decode(response_iv_b64)
         ciphertext = base64.b64decode(encrypted_json["content"])
 
-        # Decrypt with AES (CBC mode)
-        cipher = AES.new(self.aes_key, AES.MODE_CBC, iv)
+        logger.debug(f"Response IV (base64): {response_iv_b64}")
+        logger.debug(f"Response IV (decoded): {len(response_iv)} bytes")
+        logger.debug(f"Encrypted content: {len(ciphertext)} bytes")
+
+        # Use the response IV for decryption (first 16 bytes for AES-CBC)
+        iv_for_decrypt = response_iv[:16]
+        logger.debug(f"Using IV for decryption: {iv_for_decrypt[:8].hex()}...")
+
+        # Decrypt with AES (CBC mode) using the same key as request encryption
+        cipher = AES.new(self.aes_key, AES.MODE_CBC, iv_for_decrypt)
         decrypted_padded = cipher.decrypt(ciphertext)
+        logger.debug(f"Decrypted (with padding): {len(decrypted_padded)} bytes")
 
         # Try standard unpadding first
         try:
             decrypted_data = unpad(decrypted_padded, 16)
+            logger.debug(f"Standard unpadding successful: {len(decrypted_data)} bytes")
         except ValueError as e:
             logger.debug(f"Standard unpadding failed: {e}")
             # Some routers (like EX5601-T0) may not use proper PKCS7 padding
@@ -453,20 +463,33 @@ class NR7101:
             try:
                 # Remove trailing null bytes
                 decrypted_data = decrypted_padded.rstrip(b'\x00')
-                # If that doesn't work, try manual PKCS7 padding removal
-                if not decrypted_data or decrypted_data[-1] > 16:
-                    decrypted_data = decrypted_padded
-                else:
-                    # Manual PKCS7 unpadding
-                    padding_length = decrypted_padded[-1]
-                    if padding_length <= 16:
-                        decrypted_data = decrypted_padded[:-padding_length]
+                if len(decrypted_data) == len(decrypted_padded):
+                    # No null bytes were removed, try manual PKCS7 unpadding
+                    if len(decrypted_padded) > 0:
+                        padding_length = decrypted_padded[-1]
+                        if padding_length <= 16 and padding_length > 0:
+                            decrypted_data = decrypted_padded[:-padding_length]
+                        else:
+                            decrypted_data = decrypted_padded
                     else:
                         decrypted_data = decrypted_padded
+                logger.debug(f"Manual unpadding successful: {len(decrypted_data)} bytes")
             except Exception as manual_error:
                 logger.debug(f"Manual unpadding also failed: {manual_error}")
                 # Last resort: use raw decrypted data
                 decrypted_data = decrypted_padded
 
-        # Return as JSON (dict)
-        return json.loads(decrypted_data.decode("utf-8"))
+        # Try to decode and parse as JSON
+        try:
+            json_string = decrypted_data.decode("utf-8")
+            logger.debug(f"Decoded JSON string: {json_string[:100]}...")
+            return json.loads(json_string)
+        except UnicodeDecodeError as ude:
+            logger.error(f"Error processing JSON response: {ude}")
+            logger.debug(f"Raw decrypted bytes (first 50): {decrypted_data[:50]}")
+            logger.debug(f"Raw decrypted bytes (hex): {decrypted_data[:50].hex()}")
+            raise Exception(f"Failed to decode decrypted response as UTF-8: {ude}")
+        except json.JSONDecodeError as jde:
+            logger.error(f"Error parsing JSON response: {jde}")
+            logger.debug(f"Attempted to parse: {decrypted_data[:200]}")
+            raise Exception(f"Failed to parse decrypted response as JSON: {jde}")
