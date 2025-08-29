@@ -46,7 +46,7 @@ class NR7101:
             self.iv = os.urandom(16)       # 256-bit IV (some routers use 16 bytes; match what router expects)
             if self.encryption_required:
                 logger.debug("Encryption enabled for router")
-        
+
         self.login_params = {
             "Input_Account": username,
             "Input_Passwd": password_b64,
@@ -121,7 +121,7 @@ class NR7101:
         with requests.get(self.url + "/UserLoginCheck", **self.params) as r:
             assert r.status_code == 200
 
-    def get_status(self, retries=2):           
+    def get_status(self, retries=2):
         def parse_traffic_object(obj):
             ret = {}
             for iface, iface_st in zip(obj["ipIface"], obj["ipIfaceSt"]):
@@ -173,7 +173,7 @@ class NR7101:
             r.raise_for_status()
             j = r.json()
             assert j["result"] == "ZCFG_SUCCESS"
-            
+
     def encrypt_request(self, json_data: dict) -> str:
         json_body = json.dumps(json_data).encode('utf-8')
         padded = pad(json_body, 16)
@@ -202,7 +202,31 @@ class NR7101:
         # Decrypt with AES (CBC mode)
         cipher = AES.new(self.aes_key, AES.MODE_CBC, iv)
         decrypted_padded = cipher.decrypt(ciphertext)
-        decrypted_data = unpad(decrypted_padded, 16)
+
+        # Try standard unpadding first
+        try:
+            decrypted_data = unpad(decrypted_padded, 16)
+        except ValueError as e:
+            logger.debug(f"Standard unpadding failed: {e}")
+            # Some routers (like EX5601-T0) may not use proper PKCS7 padding
+            # Try removing null bytes or manual padding removal
+            try:
+                # Remove trailing null bytes
+                decrypted_data = decrypted_padded.rstrip(b'\x00')
+                # If that doesn't work, try manual PKCS7 padding removal
+                if not decrypted_data or decrypted_data[-1] > 16:
+                    decrypted_data = decrypted_padded
+                else:
+                    # Manual PKCS7 unpadding
+                    padding_length = decrypted_padded[-1]
+                    if padding_length <= 16:
+                        decrypted_data = decrypted_padded[:-padding_length]
+                    else:
+                        decrypted_data = decrypted_padded
+            except Exception as manual_error:
+                logger.debug(f"Manual unpadding also failed: {manual_error}")
+                # Last resort: use raw decrypted data
+                decrypted_data = decrypted_padded
 
         # Return as JSON (dict)
         return json.loads(decrypted_data.decode("utf-8"))
