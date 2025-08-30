@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import argparse
 import logging
 import json
-import http.client
 
 from nr7101.nr7101 import NR7101
-from version import __version__
+from nr7101.version import __version__
 
 RETRY_COUNT = 2
-
-logger = logging.getLogger(__name__)
 
 
 def cli():
@@ -37,12 +33,13 @@ def cli():
     args = parser.parse_args()
 
     if args.verbose > 0:
-        http.client.HTTPConnection.debuglevel = 1
-        logging.basicConfig()
-        logging.getLogger().setLevel(logging.DEBUG)
-        requests_log = logging.getLogger("requests.packages.urllib3")
-        requests_log.setLevel(logging.DEBUG)
-        requests_log.propagate = True
+        logging.basicConfig(level=logging.DEBUG)
+        if args.verbose > 1:
+            import http.client
+            http.client.HTTPConnection.debuglevel = 1
+            requests_log = logging.getLogger("requests.packages.urllib3")
+            requests_log.setLevel(logging.DEBUG)
+            requests_log.propagate = True
 
     dev = NR7101(args.url, args.username, args.password)
 
@@ -54,22 +51,22 @@ def cli():
     for _retry in range(RETRY_COUNT):
         try:
             status = dev.get_status(RETRY_COUNT)
-            status["device_info"] = dev.get_json_object("status")
+            if status:
+                device_info = dev.get_json_object("status")
+                if device_info:
+                    status["device_info"] = device_info
             if not args.no_cookie:
                 dev.store_cookies(args.cookie)
             break
-        except OSError:
-            logger.warn("Unable to connect")
-        except TimeoutError:
-            logger.warn("Timeout")
-        except ConnectionError:
-            pass
+        except (OSError, TimeoutError, ConnectionError):
+            if args.verbose > 0:
+                print(f"Connection attempt {_retry + 1} failed", file=sys.stderr)
 
     print(json.dumps(status, indent=2))
 
     if status is None:
         return 1
-    
+
     dev.logout()
 
     return 0
@@ -77,6 +74,4 @@ def cli():
 
 if __name__ == "__main__":
     import sys
-
-    rc = cli()
-    sys.exit(rc)
+    sys.exit(cli())

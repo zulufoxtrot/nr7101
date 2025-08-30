@@ -11,10 +11,10 @@ setup(
     url="https://github.com/pkorpine/nr7101",
     packages=["nr7101"],
     install_requires=[
-        "requests",
-        "pycryptodome"
+        "requests>=2.25.0",
+        "pycryptodomex>=3.15.0"
     ],
     entry_points={
-        "console_scripts": ["nr7101-tool=nr7101.cli:cli"],
+        "console_scripts": ["nr7101-tool=cli:cli"],
     },
 )
