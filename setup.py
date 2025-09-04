@@ -1,9 +1,17 @@
 from setuptools import setup
-from nr7101.version import __version__
+import os
+
+def get_version():
+    version_file = os.path.join(os.path.dirname(__file__), 'nr7101', 'version.py')
+    with open(version_file, 'r') as f:
+        content = f.read()
+    namespace = {}
+    exec(content, namespace)
+    return namespace['__version__']
 
 setup(
     name="nr7101",
-    version=__version__,
+    version=get_version(),
     description="Zyxel NR7101 tool",
     author="Pekka Korpinen",
     author_email="pekka.korpinen@iki.fi",
@@ -12,7 +20,7 @@ setup(
     packages=["nr7101"],
     install_requires=[
         "requests>=2.25.0",
-        "pycryptodomex>=3.15.0"
+        "pycryptodome>=3.15.0"
     ],
     entry_points={
         "console_scripts": ["nr7101-tool=cli:cli"],
