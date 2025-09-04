@@ -1,17 +1,9 @@
 from setuptools import setup
-import os
-
-def get_version():
-    version_file = os.path.join(os.path.dirname(__file__), 'nr7101', 'version.py')
-    with open(version_file, 'r') as f:
-        content = f.read()
-    namespace = {}
-    exec(content, namespace)
-    return namespace['__version__']
+from nr7101.version import __version__
 
 setup(
     name="nr7101",
-    version=get_version(),
+    version=__version__,
     description="Zyxel NR7101 tool",
     author="Pekka Korpinen",
     author_email="pekka.korpinen@iki.fi",
