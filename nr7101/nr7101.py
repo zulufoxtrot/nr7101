@@ -272,7 +272,7 @@ class NR7101:
     def get_json_object(self, oid):
         # Add session key to URL for authenticated requests
         if self.sessionkey:
-            url = self.url + "/cgi-bin/DAL?oid=" + oid + "&sessionkey=" + self.sessionkey
+            url = self.url + "/cgi-bin/DAL?oid=" + oid + "&sessionkey=" + str(self.sessionkey)
         else:
             url = self.url + "/cgi-bin/DAL?oid=" + oid
 
