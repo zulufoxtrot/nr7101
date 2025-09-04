@@ -4,14 +4,16 @@ import logging
 import json
 
 from nr7101.nr7101 import NR7101
-from nr7101.version import __version__
+from importlib.metadata import version
 
 RETRY_COUNT = 2
 
 
 def cli():
+    package_version = version("nr7101")
+
     parser = argparse.ArgumentParser(
-        description=f"NR7101 status fetcher v{__version__}"
+        description=f"NR7101 status fetcher v{package_version}"
     )
     parser.add_argument("--verbose", "-v", action="count", default=0)
     parser.add_argument("--cookie", default=".nr7101.cookie")

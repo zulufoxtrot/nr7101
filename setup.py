@@ -9,6 +9,7 @@ setup(
     license="MIT",
     url="https://github.com/pkorpine/nr7101",
     packages=["nr7101"],
+    py_modules=["cli"],
     install_requires=[
         "requests>=2.25.0",
         "pycryptodome>=3.15.0"
