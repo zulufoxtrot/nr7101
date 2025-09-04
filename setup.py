@@ -1,9 +1,8 @@
 from setuptools import setup
-from nr7101.version import __version__
 
 setup(
     name="nr7101",
-    version=__version__,
+    version="1.4.2",
     description="Zyxel NR7101 tool",
     author="Pekka Korpinen",
     author_email="pekka.korpinen@iki.fi",
