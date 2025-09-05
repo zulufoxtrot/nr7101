@@ -4,9 +4,9 @@ import logging
 import json
 import base64
 import os
-from Cryptodome.Cipher import AES, PKCS1_v1_5
-from Cryptodome.Util.Padding import pad, unpad
-from Cryptodome.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_v1_5
+from Crypto.Util.Padding import pad, unpad
+from Crypto.PublicKey import RSA
 
 import requests
 import urllib3
