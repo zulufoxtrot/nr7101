@@ -156,15 +156,12 @@ class NR7101:
                     self.params["cookies"] = {}
                 self.params["cookies"].update(new_cookies)
 
-            try:
-                if self.encryption_required:
-                    response_data = self.decrypt_response(r.json())
-                else:
-                    response_data = r.json()
-                self.sessionkey = response_data["sessionkey"]
-                return True
-            except Exception:
-                return False
+            if self.encryption_required:
+                response_data = self.decrypt_response(r.json())
+            else:
+                response_data = r.json()
+            self.sessionkey = response_data["sessionkey"]
+            return True
 
     def logout(self, sessionkey=None):
         if sessionkey is None:
