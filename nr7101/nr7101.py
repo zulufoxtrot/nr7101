@@ -4,6 +4,8 @@ import logging
 import json
 import base64
 import os
+import re
+import gsm0338  # noqa: F401  (registers the "gsm03.38" codec)
 from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.Util.Padding import pad, unpad
 from Crypto.PublicKey import RSA
@@ -14,8 +16,79 @@ import urllib3
 logger = logging.getLogger(__name__)
 
 
+def gsm_encode(text):
+    """Pack ``text`` into the GSM 7-bit hex string used by the web UI.
+
+    Mirrors ``contentGsmConverter`` in the router's app.js: the gsm0338 codec
+    maps each character to its septet (extension characters to an ESC septet
+    followed by their own), the septets are packed LSB-first into octets, and
+    the result is hex encoded. Returns ``(hex_string, septet_count)``, where
+    extension characters count twice, matching ``SMS_ContentLength``.
+    """
+    try:
+        septets = text.encode("gsm03.38")
+    except UnicodeEncodeError as e:
+        raise NR7101Exception(
+            f"Character not representable in GSM: {e.object[e.start:e.end]!r}"
+        ) from e
+
+    # Pack septets LSB-first into a bitstream, then emit octets.
+    bits = 0
+    nbits = 0
+    out = bytearray()
+    for value in septets:
+        bits |= (value & 0x7F) << nbits
+        nbits += 7
+        while nbits >= 8:
+            out.append(bits & 0xFF)
+            bits >>= 8
+            nbits -= 8
+    if nbits > 0:
+        out.append(bits & 0xFF)
+
+    return out.hex(), len(septets)
+
+
+# GSM single-message limit in characters (app.js singleMessageLength).
+SMS_SINGLE_MESSAGE_LENGTH = 160
+
+
+def build_sms_object(number, message):
+    """Build the ``cellwan_sms`` POST body for sending an SMS (GSM charset).
+
+    ``SMS_Content_divLen`` / ``SMS_Content_divData`` carry the segment(s) the
+    modem actually transmits; leaving them empty makes the router accept the
+    request but send nothing. For a single (non-concatenated) message they hold
+    one entry equal to the whole content. Note the web UI only fills these two
+    fields when its ``isSupportSmsCmd`` flag is set; sending them
+    unconditionally is what works.
+    """
+    content_hex, length = gsm_encode(message)
+    # sentToFilter; re.ASCII so \D keeps the JS semantics (no Unicode digits)
+    digits = re.sub(r"\D", "", number, flags=re.ASCII)
+
+    if length > SMS_SINGLE_MESSAGE_LENGTH:
+        raise NR7101Exception(
+            "Message too long for a single SMS; concatenated (multi-part) "
+            "messages are not supported"
+        )
+
+    return {
+        "SMS_Format": 0,
+        "SMS_CharacterSet": "GSM",
+        "SMS_To": digits,
+        "SMS_ContentLength": length,
+        "SMS_TimeStamp": "",
+        "SMS_Content": content_hex,
+        "SMS_NotifyEnable": False,
+        "SMS_Content_divLen": [length],
+        "SMS_Content_divData": [content_hex],
+    }
+
+
 class NR7101Exception(Exception):
     def __init__(self, error):
+        super().__init__(error)
         self.error = error
 
 
@@ -265,6 +338,43 @@ class NR7101:
                 continue
 
         return available_endpoints
+
+    def send_sms(self, number, message, timedelay=1):
+        """Send an SMS (GSM charset) via ``cgi-bin/DAL?oid=cellwan_sms``.
+
+        The body is encrypted when the router negotiated an RSA key, exactly
+        like every other authenticated request.
+        """
+        if self.sessionkey is None:
+            self.login()
+        if self.sessionkey is None:
+            raise NR7101Exception("Login failed")
+
+        obj = build_sms_object(number, message)
+        if self.encryption_required:
+            body = self.encrypt_request(obj)
+        else:
+            body = json.dumps(obj, separators=(",", ":"))
+
+        url = (
+            f"{self.url}/cgi-bin/DAL?oid=cellwan_sms"
+            f"&timedelay={timedelay}&sessionkey={self.sessionkey}"
+        )
+        params = self.params.copy()
+        params["headers"] = dict(params.get("headers", {}))
+        params["headers"]["Content-Type"] = (
+            "application/x-www-form-urlencoded; charset=UTF-8"
+        )
+
+        with requests.post(url, data=body, **params) as r:
+            r.raise_for_status()
+            if self.encryption_required:
+                j = self.decrypt_response(r.json())
+            else:
+                j = r.json()
+            if j.get("result") != "ZCFG_SUCCESS":
+                raise NR7101Exception(f"SMS send failed: {j}")
+            return j
 
     def get_json_object(self, oid):
         # Add session key to URL for authenticated requests
