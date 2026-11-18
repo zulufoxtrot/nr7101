@@ -3,10 +3,12 @@ import argparse
 import logging
 import json
 
-from nr7101.nr7101 import NR7101
+from nr7101.nr7101 import NR7101, NR7101Exception
 from importlib.metadata import version
 
 RETRY_COUNT = 2
+
+logger = logging.getLogger(__name__)
 
 
 def cli():
@@ -28,6 +30,12 @@ def cli():
         action="store_true",
         help="Reboot the unit regardless of the connection status",
     )
+    parser.add_argument(
+        "--sms",
+        nargs=2,
+        metavar=("NUMBER", "MESSAGE"),
+        help="Send an SMS to NUMBER with the given MESSAGE and exit",
+    )
     parser.add_argument("url")
     parser.add_argument("username")
     parser.add_argument("password")
@@ -47,6 +55,18 @@ def cli():
 
     if not args.no_cookie:
         dev.load_cookies(args.cookie)
+
+    if args.sms:
+        number, message = args.sms
+        try:
+            result = dev.send_sms(number, message)
+        except (NR7101Exception, OSError) as e:
+            logger.error("Unable to send SMS: %s", e)
+            return 1
+        if not args.no_cookie:
+            dev.store_cookies(args.cookie)
+        print(json.dumps(result, indent=2))
+        return 0
 
     status = None
 

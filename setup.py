@@ -12,7 +12,8 @@ setup(
     py_modules=["cli"],
     install_requires=[
         "requests>=2.25.0",
-        "pycryptodome>=3.15.0"
+        "pycryptodome>=3.15.0",
+        "gsm0338>=1.1.0"
     ],
     entry_points={
         "console_scripts": ["nr7101-tool=cli:cli"],

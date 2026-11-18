@@ -19,6 +19,19 @@ The tool can reboot the unit when the connection is down (i.e. `INTF_STATUS` ==
 `Down`). Use `--reboot` to enable this feature. If you want to reboot the unit
 regardless of the connection status, use `--force-reboot`.
 
+### Sending SMS
+
+Use `--sms` to send a text message instead of fetching the status:
+
+```sh
+nr7101-tool --sms +447700900123 "Hello from the router" https://192.168.1.1 admin password
+```
+
+The message is encoded with the GSM 7-bit alphabet, so it is limited to the
+characters of 3GPP TS 23.038 and to a single 160-character message;
+concatenated (multi-part) messages are not supported. Characters such as `{`,
+`}`, `[`, `]`, `|`, `\`, `^` and `€` count as two.
+
 ## Example output
 
 ```json
