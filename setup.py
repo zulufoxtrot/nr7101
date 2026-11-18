@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="nr7101",
-    version="2.0.2",
+    version="2.0.3",
     description="Zyxel NR7101 tool",
     author="Pekka Korpinen",
     author_email="pekka.korpinen@iki.fi",

@@ -20,7 +20,10 @@ class NR7101Exception(Exception):
 
 
 class NR7101:
-    def __init__(self, url, username, password, params={}):
+    def __init__(self, url, username, password, params={}, session=None):
+        # A requests.Session reuses one keep-alive connection for all calls;
+        # without one, every call opens (and closes) its own connection.
+        self.http = session if session is not None else requests
         self.url = url
         self.params = params
         self.rsa_key = None
@@ -42,7 +45,7 @@ class NR7101:
         info_params = self.params.copy()
         info_params['headers'] = info_headers
 
-        with requests.get(self.url + "/GetInfoNoLogin", **info_params) as info_r:
+        with self.http.get(self.url + "/GetInfoNoLogin", **info_params) as info_r:
             if info_r.cookies:
                 self.params["cookies"] = requests.utils.dict_from_cookiejar(info_r.cookies)
 
@@ -61,7 +64,7 @@ class NR7101:
         else:
             rsa_params['headers'] = rsa_headers
 
-        with requests.get(self.url + "/getRSAPublickKey", **rsa_params) as r:
+        with self.http.get(self.url + "/getRSAPublickKey", **rsa_params) as r:
             # Update session cookies from the RSA key request (if any)
             if r.cookies:
                 if "cookies" not in self.params:
@@ -143,7 +146,7 @@ class NR7101:
         else:
             login_params['headers'] = login_headers
 
-        with requests.post(
+        with self.http.post(
             self.url + "/UserLogin", data=login_json.encode('utf-8'), **login_params
         ) as r:
             if r.status_code != 200:
@@ -166,18 +169,18 @@ class NR7101:
     def logout(self, sessionkey=None):
         if sessionkey is None:
             sessionkey = self.sessionkey
-        with requests.get(
+        with self.http.get(
             f"{self.url}/cgi-bin/UserLogout?sessionkey={sessionkey}", **self.params
         ) as r:
             assert r.status_code == 200
 
     def connect(self):
-        with requests.get(self.url + "/getBasicInformation", **self.params) as r:
+        with self.http.get(self.url + "/getBasicInformation", **self.params) as r:
             assert r.status_code == 200
             assert r.json()["result"] == "ZCFG_SUCCESS", "Connection failure"
 
         # Check login
-        with requests.get(self.url + "/UserLoginCheck", **self.params) as r:
+        with self.http.get(self.url + "/UserLoginCheck", **self.params) as r:
             assert r.status_code == 200
 
     def get_status(self, retries=2):
@@ -273,7 +276,7 @@ class NR7101:
         else:
             url = self.url + "/cgi-bin/DAL?oid=" + oid
 
-        with requests.get(url, **self.params) as r:
+        with self.http.get(url, **self.params) as r:
             r.raise_for_status()
 
             if self.encryption_required:
@@ -290,7 +293,7 @@ class NR7101:
         if self.sessionkey is None:
             self.login()
 
-        with requests.post(
+        with self.http.post(
             f"{self.url}/cgi-bin/Reboot?sessionkey={self.sessionkey}", **self.params
         ) as r:
             r.raise_for_status()
